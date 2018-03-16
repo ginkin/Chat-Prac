@@ -3,6 +3,8 @@
 /*** functions ****************************************************/
 
 
+
+
 const char *Program	= NULL;/* program name for descriptive diagnostics */
 
 int Shutdown	= 0;	/* keep running until Shutdown == 1 */
