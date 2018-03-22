@@ -1,28 +1,22 @@
 #include "ChatServer.h"
-
+#include "ChatServerlist.h"
+#include "Constants.h"
+#include "Friendlist.h"
 /*** functions ****************************************************/
-
-
 
 
 const char *Program	= NULL;/* program name for descriptive diagnostics */
 
 int Shutdown	= 0;	/* keep running until Shutdown == 1 */
 
-char ClockBuffer[26] = "";	/* current time in printable format */
+USERBASE *userbase;
 
-//initialize an array of users
-void InitializeUsers(USER user[], int size) {
-	int i; int j;
-	for (i = 0; i < size; i++) {
-		strcpy(user[i].username, "None");
-		strcpy(user[i].password, "None");
-		user[i].isconnected = 0; // 0 is offline 1 is online
-		for (j = 0; j < USERNUM; j++) {
-			strcpy(user[i].friends[j], "None");
-		}
-	}
-}
+char sendusername[LOGINLEN],sendpassword[LOGINLEN];
+
+int read_fds[8];
+int write_fds[8];
+
+char ClockBuffer[26] = "";	/* current time in printable format */
 
 //String Tokenizer
 void StringToken(char str[], char username[], char password[]) {
@@ -101,27 +95,19 @@ void PrintCurrentTime(void)	/*  print/update the current real time */
 } /* end of PrintCurrentTime */
 
 void ProcessRequest(		/* process a time request by a client */
-	int DataSocketFD, USER userbase[USERNUM])
+	int DataSocketFD)
 {
-	int  l, n, k, h;
+	int  i,l, n, k, h;
 	char RecvBuf[256];	/* message buffer for receiving a message */
 	char SendBuf[256];	/* message buffer for sending a response */
 
 	USER onlineuser[USERNUM];
-	InitializeUsers(onlineuser, USERNUM);
 
-	// Scan Userbase to add all onlineusers to the array
-	for (k = 0; k < USERNUM; k++) {
-		if (userbase[k].isconnected == 1) {
-			for (h = 0; h < USERNUM; h++) {
-				if (onlineuser[h].isconnected == 0) {
-					onlineuser[h] = userbase[k];
-				}
-			}
-		}
-	}
 
+	printf("\nDataFD:%d\n",DataSocketFD);
 	n = read(DataSocketFD, RecvBuf, sizeof(RecvBuf) - 1);
+	printf("\nread success:%s\n",RecvBuf);
+/*				mark				*/
 	if (n < 0)
 	{
 		FatalError("reading from data socket failed");
@@ -130,11 +116,40 @@ void ProcessRequest(		/* process a time request by a client */
 #ifdef DEBUG
 	printf("%s: Received message: %s\n", Program, RecvBuf);
 #endif
-	if (0 == strcmp(RecvBuf, "TIME"))
+	if (0 == strncmp(RecvBuf, "WRITING", 7))//writing socket
 	{
-		strncpy(SendBuf, "OK TIME: ", sizeof(SendBuf) - 1);
-		SendBuf[sizeof(SendBuf) - 1] = 0;
-		strncat(SendBuf, ClockBuffer, sizeof(SendBuf) - 1 - strlen(SendBuf));
+		char loginusername[LOGINLEN], loginpassword[LOGINLEN];
+    StringToken(RecvBuf, loginusername, loginpassword);
+    USER *temp_user = FindUSER(userbase, loginusername);
+    temp_user->socketFD = DataSocketFD;
+    for(i = 0; i < 8; i++)
+    {
+      if(write_fds[i] == 0)
+      {
+			  write_fds[i] = DataSocketFD;
+        break;
+      }
+    }
+    strncpy(SendBuf, "Writing socket connected.", sizeof(SendBuf) - 1);
+    SendBuf[strlen(SendBuf)] = 0;
+    printf("\n%s\n",SendBuf);
+    n = send(temp_user->socketFD, SendBuf, strlen(SendBuf)+1,0);
+    /*for(i=0; i<USERNUM; i++){
+  		if(strcmp(temp_user->friends[i], "")  != 0){
+        USER *friend = FindUSER(userbase,temp_user->friends[i]);
+  			strncpy(SendBuf, "FRIEND-", 8);
+        strcat(SendBuf, friend->username);
+        strcat(SendBuf, "-");
+        if (friend->socketFD != 0)
+          strcat(SendBuf, "ONLINE");
+        else
+          strcat(SendBuf, "OFFLINE");
+        SendBuf[strlen(SendBuf)] = 0;
+        printf("\n%s\n",SendBuf);
+        n = send(temp_user->socketFD,SendBuf,strlen(SendBuf)+1,0);
+  		}
+	  }*/
+    
 	}
 	else if (0 == strncmp(RecvBuf, "LOGIN", 5))//LOGIN command "LOGIN-username-password"
 	{
@@ -148,24 +163,27 @@ void ProcessRequest(		/* process a time request by a client */
 		//printf("\nPassword entered: %s\n", loginpassword);
 		//printf("\nUsername[0]: %s\n", userbase[0].username);
 		//printf("\nstrcmp = : %d\n", strcmp(loginusername, userbase[m].username));
-		for (m = 0; m < USERNUM; m++) {
-			if (strcmp(loginusername, userbase[m].username) == 0) { //strncmp returns 0 when there is matched username
-				if (strcmp(loginpassword, userbase[m].password) == 0) {
-					userbase[m].isconnected = 1;
-					strncpy(SendBuf, "Logged in successfully!", sizeof(SendBuf) - 1);
-					printf("\nUser %s is Logged in: %d\n", userbase[m].username, userbase[m].isconnected);
-					break;
-				}
-				else {
-					strncpy(SendBuf, "Password Incorrect!", sizeof(SendBuf) - 1);
-					break;
-				}
-			}
-			else {
-				strncpy(SendBuf, "No matched username in database!", sizeof(SendBuf) - 1);
-			}
+    USER *found = FindUSER(userbase, loginusername);
+    if (found != NULL)
+    {
+      if (0 == strcmp(found->password,loginpassword))
+      {
+        strncpy(SendBuf, "LOGIN-", 7);
+        strcat(SendBuf, loginusername);
+        strcat(SendBuf, "-");
+        strcat(SendBuf, loginpassword);
+      }
+  		else {
+  		  strncpy(SendBuf, "Password Incorrect!", sizeof(SendBuf) - 1);
+  		}
+		}
+		else {
+		  strncpy(SendBuf, "No matched username in database!", sizeof(SendBuf) - 1);
 		}
 		SendBuf[sizeof(SendBuf) - 1] = 0;
+    n = write(DataSocketFD, SendBuf, strlen(SendBuf));
+    printf("\nFD:%d\n",DataSocketFD);
+    close(DataSocketFD);
 	}
 	else if (0 == strncmp(RecvBuf, "REGISTER", 7))//REGISTER command "REGISTER-username-password"
 	{
@@ -173,60 +191,186 @@ void ProcessRequest(		/* process a time request by a client */
 		char registerpassword[LOGINLEN] = " ";
 		int m;
 		int i = 0;
-		int used = 0;
+	  USER *used = NULL;
 		StringToken(RecvBuf, registerusername, registerpassword);
 
 		// Check if the name is already used
-		for (m = 0; m < USERNUM; m++) {
-			if (strcmp(registerusername, userbase[m].username) == 0) { //strncmp returns 0 when there is matched username
-				strncpy(SendBuf, "Error: Username already used!", sizeof(SendBuf) - 1);
-				used = 1;
-				break;
-			}
-		}
+		used = FindUSER(userbase, registerusername);
 
-		if (used == 0) {
-			for (m = 0; m < USERNUM; m++) {
-				if (strcmp("None", userbase[m].username) == 0) {
-					strcpy(userbase[m].username, registerusername);
-					strcpy(userbase[m].password, registerpassword);
-					printf("New User %d registered.", userbase[m].username);
-					strncpy(SendBuf, "New account registered successfully!", sizeof(SendBuf) - 1);
-					break;
-				}
-			}
+		if (used == NULL) {
+			userbase = NewUSER(userbase, registerusername, registerpassword);
+      strncpy(SendBuf, "New account registered successfully!", sizeof(SendBuf) - 1);
 		}
+    else{
+      strncpy(SendBuf, "Error: Username already used!", sizeof(SendBuf) - 1);
+    }
 		SendBuf[sizeof(SendBuf) - 1] = 0;
-	}
-	else if(0 == strcmp(RecvBuf, "LIST") )//LIST command "LIST" -tells user which of its contacts are online
+    n = write(DataSocketFD, SendBuf, strlen(SendBuf));
+    printf("\nFD:%d\n",DataSocketFD);
+    close(DataSocketFD);
+	}		
+
+	else if (0 == strncmp(RecvBuf, "ADD", 3))
 	{
-		printf("List of online friends coming soon..");
+    char username[LOGINLEN] = " ";
+		char message[256] = " ";
+    StringToken(RecvBuf, username, message);
+    USER *from = FindUSER(userbase, sendusername);
+    USER *target = FindUSER(userbase, username);
+    strncpy(SendBuf, "REQUEST-", 9);
+    strcat(SendBuf, sendusername);
+    strcat(SendBuf, "-");
+    strcat(SendBuf, message);
+    if (target == NULL){
+      strncpy(SendBuf, "Error: No such user!", sizeof(SendBuf) - 1);
+    }
+    else if (target->socketFD != 0)
+    {
+      n = send(target->socketFD,SendBuf,strlen(SendBuf),0);
+      strncpy(SendBuf, "Invitation sent!", sizeof(SendBuf) - 1);
+    }
+    else
+    {
+      strncpy(SendBuf, "Error: Friend not online!", sizeof(SendBuf) - 1);
+    }
+    SendBuf[sizeof(SendBuf) - 1] = 0;
+    n = write(DataSocketFD, SendBuf, strlen(SendBuf));
+    close(DataSocketFD);
 	}
-	else if(0 == strcmp(RecvBuf, "UPDATE") )//UPDATE command "UPDATE" -updates the status of the user to the server
-	{
-	
-	}
-	else if (0 == strcmp(RecvBuf, "SHUTDOWN"))
-	{
-		Shutdown = 1;
-		strncpy(SendBuf, "OK SHUTDOWN", sizeof(SendBuf) - 1);
-		SendBuf[sizeof(SendBuf) - 1] = 0;
-	}
+  else if (0 == strncmp(RecvBuf, "ACCEPT",6))
+  {
+    char username[LOGINLEN] = " ";
+		char message[256] = " ";
+    StringToken(RecvBuf, username, message);
+    USER *from = FindUSER(userbase, sendusername);
+    USER *target = FindUSER(userbase, username);
+    strncpy(SendBuf, "ADD-", 5);
+    strcat(SendBuf, sendusername);
+    strcat(SendBuf, "-");
+    strcat(SendBuf, message);
+    if (target->socketFD != 0)
+    {
+      n = send(target->socketFD,SendBuf,strlen(SendBuf),0);
+      from = AddUser(from,target);
+      target = AddUser(target,from);
+      strncpy(SendBuf, "ACCEPT-", 8);
+      strcat(SendBuf, username);
+      strcat(SendBuf, "-");
+      strcat(SendBuf, message);
+    }
+    else
+    {
+      strncpy(SendBuf, "Error: Friend not online!", sizeof(SendBuf) - 1);
+    }
+    SendBuf[sizeof(SendBuf) - 1] = 0;
+    n = write(DataSocketFD, SendBuf, strlen(SendBuf));
+    close(DataSocketFD);
+  }
+  else if (0 == strncmp(RecvBuf, "REJECT",6))
+  {
+    strncpy(SendBuf, "Invitation rejected!", sizeof(SendBuf) - 1);
+    SendBuf[sizeof(SendBuf) - 1] = 0;
+    n = write(DataSocketFD, SendBuf, strlen(SendBuf));
+    close(DataSocketFD);
+  }
+  else if (0 == strncmp(RecvBuf, "DELETE",6))
+  {
+    char username[LOGINLEN] = " ";
+		char message[256] = " ";
+    StringToken(RecvBuf, username, message);
+    USER *from = FindUSER(userbase, sendusername);
+    USER *target = FindUSER(userbase, username);
+    strncpy(SendBuf, "DELETE-", 8);
+    strcat(SendBuf, sendusername);
+    strcat(SendBuf, "-");
+    strcat(SendBuf, message);
+    if (target->socketFD != 0)
+    {
+      n = send(target->socketFD,SendBuf,strlen(SendBuf),0);
+      from = DeleteUser(from,target);
+      target = DeleteUser(target,from);
+      strncpy(SendBuf, "Deleted", sizeof(SendBuf) - 1);
+    }
+    else
+    {
+      strncpy(SendBuf, "Error: Friend not online!", sizeof(SendBuf) - 1);
+    }
+    SendBuf[sizeof(SendBuf) - 1] = 0;
+    n = write(DataSocketFD, SendBuf, strlen(SendBuf));
+    close(DataSocketFD);
+  }
+  else if (0 == strncmp(RecvBuf, "CLOSE",5))
+  {
+    char username[LOGINLEN] = " ";
+		char message[256] = " ";
+    char filecreate[256];
+    StringToken(RecvBuf, username, message);
+    strcpy(filecreate, username);
+  	strcat(filecreate, "_friends.txt");	
+    int rem = remove(filecreate);
+  	FILE *fp = NULL;
+    fp = fopen(filecreate, "w");
+    USER *closed = FindUSER(userbase, username);
+    for (i=0; i<USERNUM; i++){ 
+  		if(strcmp(closed->friends[i], "") == 0){
+        fprintf(fp, "%s\n",username);
+  		}
+	  }  
+  	fclose(fp);
+    close(closed->socketFD);
+    closed->socketFD = 0;
+    strncpy(SendBuf, "Closed", sizeof(SendBuf) - 1);
+    SendBuf[sizeof(SendBuf) - 1] = 0;
+    n = write(DataSocketFD, SendBuf, strlen(SendBuf));
+    close(DataSocketFD);
+  }
+  else if (0 == strncmp(RecvBuf, "CHAT",4))
+  {
+    char username[LOGINLEN] = " ";
+		char message[256] = " ";
+    StringToken(RecvBuf, username, message);
+  }
+  else if (0 == strncmp(RecvBuf, "SEND",4))
+  {
+    char username[LOGINLEN] = " ";
+		char message[256] = " ";
+    StringToken(RecvBuf, username, message);
+    USER *from = FindUSER(userbase, sendusername);
+    USER *target = FindUSER(userbase, username);
+    strncpy(SendBuf, "SEND-", 7);
+    strcat(SendBuf, sendusername);
+    strcat(SendBuf, "-");
+    strcat(SendBuf, message);
+    //printf("\n%d,%d\n",DataSocketFD, target->socketFD);
+    n = send(target->socketFD,SendBuf,strlen(SendBuf),0);
+        printf("\nn:%d,%s\n",n,message);
+	strcpy(SendBuf, "Sent");
+        //cnt++;
+       // break;
+	  n = write(DataSocketFD, SendBuf, strlen(SendBuf));
+     printf("\nFD:%d\n",DataSocketFD);
+    close(DataSocketFD);
+  }
 	else
 	{
 		strncpy(SendBuf, "ERROR unknown command ", sizeof(SendBuf) - 1);
 		SendBuf[sizeof(SendBuf) - 1] = 0;
 		strncat(SendBuf, RecvBuf, sizeof(SendBuf) - 1 - strlen(SendBuf));
+    n = write(DataSocketFD, SendBuf, strlen(SendBuf));
+    printf("\nFD:%d\n",DataSocketFD);
+    close(DataSocketFD);
 	}
-	l = strlen(SendBuf);
+	//l = strlen(SendBuf);
 #ifdef DEBUG
 	printf("%s: Sending response: %s.\n", Program, SendBuf);
 #endif
-	n = write(DataSocketFD, SendBuf, l);
+	printf("\nresponse:%s\n",SendBuf);
+	//n = write(DataSocketFD, SendBuf, l);
 	if (n < 0)
 	{
 		FatalError("writing to data socket failed");
 	}
+
 } /* end of ProcessRequest */
 
 void ServerMainLoop(		/* simple server main loop */
@@ -234,78 +378,102 @@ void ServerMainLoop(		/* simple server main loop */
 	ClientHandler HandleClient,	/* client handler to call */
 	TimeoutHandler HandleTimeout,	/* timeout handler to call */
 	int Timeout,
-	USER user[USERNUM],
-	USER userbase[USERNUM]
-)			/* timeout in micro seconds */
+	USERBASE *userbase)			
 {
 	int DataSocketFD;	/* socket for a new client */
 	socklen_t ClientLen;
 	struct sockaddr_in
-		ClientAddress;	/* client address we connect with */
-	fd_set ActiveFDs;	/* socket file descriptors to select from */
+	ClientAddress;	/* client address we connect with */
+	fd_set WriteFDs;	/* socket file descriptors to select from */
 	fd_set ReadFDs;	/* socket file descriptors ready to read from */
 	struct timeval TimeVal;
-	int res, i;
+	int n,res, i, max_fd,k = 0;
+	char temp[256];
 
-	FD_ZERO(&ActiveFDs);		/* set of active sockets */
-	FD_SET(ServSocketFD, &ActiveFDs);	/* server socket is active */
+  for(i = 0; i < 8; i++) 
+  {
+  	read_fds[i] = 0;
+  	write_fds[i] = 0;
+  	printf("\n%d,%d,%d\n",i,read_fds[i],write_fds[i]);
+  }
 	while (!Shutdown)
 	{
-		ReadFDs = ActiveFDs;
-		TimeVal.tv_sec = Timeout / 1000000;	/* seconds */
-		TimeVal.tv_usec = Timeout % 1000000;	/* microseconds */
-												/* block until input arrives on active sockets or until timeout */
-		res = select(FD_SETSIZE, &ReadFDs, NULL, NULL, &TimeVal);
-		if (res < 0)
-		{
-			FatalError("wait for input or timeout (select) failed");
-		}
-		if (res == 0)	/* timeout occurred */
-		{
-#ifdef DEBUG
-			printf("%s: Handling timeout...\n", Program);
-#endif
-			HandleTimeout();
-		}
-		else		/* some FDs have data ready to read */
-		{
-			for (i = 0; i<FD_SETSIZE; i++)
-			{
-				if (FD_ISSET(i, &ReadFDs)) {
-					if (i == ServSocketFD) {	/* connection request on server socket */
-						printf("%s: Accepting new client %d...\n", Program, i);
-						ClientLen = sizeof(ClientAddress);
-						DataSocketFD = accept(ServSocketFD,
-							(struct sockaddr*)&ClientAddress, &ClientLen);
-						if (DataSocketFD < 0)
-						{
-							FatalError("data socket creation (accept) failed");
-						}
-						printf("%s: Client %d connected from %s:%hu.\n",
-							Program, i,
-							inet_ntoa(ClientAddress.sin_addr),
-							ntohs(ClientAddress.sin_port));
-						FD_SET(DataSocketFD, &ActiveFDs);
-						//printf("New connection , socket fd is %d , ip is : %s , port : %d \n",
-						//DataSocketFD, inet_ntoa(ClientAddress.sin_addr), ntohs(ClientAddress.sin_port));
-					}
-					else
-					{   /* active communication with a client */
-#ifdef DEBUG
-						printf("%s: Dealing with client %d...\n", Program, i);
-#endif
-						HandleClient(i, userbase);
-#ifdef DEBUG
-						printf("%s: Closing client %d connection.\n", Program, i);
-#endif
-						close(i);
-						FD_CLR(i, &ActiveFDs);
-					}
-				}
-			}
-		}
-	}
-} /* end of ServerMainLoop */
+    FD_ZERO(&ReadFDs);  
+    FD_ZERO(&WriteFDs);
+    FD_SET(ServSocketFD, &ReadFDs);
+  	for(i = 0; i < 8; i++)  
+  	{
+  	  if(read_fds[i]!=0){
+  		FD_SET(read_fds[i],&ReadFDs);
+  		//printf("\n%d\n",read_fds[i]);
+  	  }
+  	  if(write_fds[i]!=0){
+  		  FD_SET(write_fds[i],&WriteFDs);
+  		//  printf("%d\n",write_fds[i]);
+  	  }  
+  	}	
+  	
+  	TimeVal.tv_sec = Timeout / 1000000;	/* seconds */
+  	TimeVal.tv_usec = Timeout % 1000000;	/* microseconds */
+  	/* block until input arrives on active sockets or until timeout */
+  	
+    res = select(FD_SETSIZE, &ReadFDs, NULL, NULL, &TimeVal);
+  	if (res < 0)
+  	{
+  		FatalError("wait for input or timeout (select) failed");
+  	}
+  	else if (res == 0)	/* timeout occurred */
+  	{
+    #ifdef DEBUG
+      printf("%s: Handling timeout...\n", Program);
+    #endif
+    HandleTimeout();
+    }		
+    else		/* some FDs have data ready to read */
+    {
+  		if(FD_ISSET(ServSocketFD, &ReadFDs)){
+    		printf("%s: Accepting new client %d...\n", Program, i);
+        ClientLen = sizeof(ClientAddress);
+    	  DataSocketFD = accept(ServSocketFD,(struct sockaddr*)&ClientAddress, &ClientLen);
+        if (DataSocketFD < 0)
+        {
+          FatalError("data socket creation (accept) failed");
+    	  }
+        printf("%s: Client %d connected from %s:%hu.\n",Program, i,inet_ntoa(ClientAddress.sin_addr),ntohs(ClientAddress.sin_port));
+  	    n = recv(DataSocketFD,temp, sizeof(temp)-1,0);
+        temp[n] = 0;
+  		  StringToken(temp, sendusername,sendpassword);
+    		printf("\n%s\n",temp);
+
+    		for(i = 0; i < 8; i++)  
+        {  
+          if(read_fds[i] == 0)  
+          {   
+            read_fds[i] = DataSocketFD;  
+            break;  
+          }  
+        }  
+
+  	  }
+    	for (i = 0; i<8; i++)
+    	{
+    	  if (read_fds[i] != 0)
+    	  {
+    			if (FD_ISSET(read_fds[i], &ReadFDs))
+    			{
+    			  HandleClient(read_fds[i]);
+            read_fds[i] = 0; 
+            break;
+    			}
+    	  }
+      }
+  				 /* active communication with a client */
+  }
+}
+}
+ /* end of ServerMainLoop */
+
+
 
   /*** main function *******************************************************/
 
@@ -315,22 +483,9 @@ int main(int argc, char *argv[])
 	int PortNo;		/* port number */
 
 					//arrays of usernames and passwords in database
-	USER userbase[USERNUM];
-	InitializeUsers(userbase, USERNUM);
-
-	//We will be able to read all user's info into the program
-	strcpy(userbase[0].username, "Ray");
-	strcpy(userbase[0].password, "Ray");
-	strcpy(userbase[1].username, "Micky");
-	strcpy(userbase[1].password, "Micky");
-
-	//arrays of usernames and passwords for connected users
-	USER user[USERNUM];
-	InitializeUsers(user, 30);
-
-	//arrays of users' msgs sent to server;
-	char usermsg[30][MSGNUM][MSGLEN];
-	int usermsgnum[30] = { 0 };
+	printf("\nmark\n");
+	userbase = InitializeUserbase();
+	printf("\nmark\n");
 
 	Program = argv[0];	/* publish program name (for diagnostics) */
 #ifdef DEBUG
@@ -351,10 +506,11 @@ int main(int argc, char *argv[])
 #ifdef DEBUG
 	printf("%s: Creating the server socket...\n", Program);
 #endif
+
 	ServSocketFD = MakeServerSocket(PortNo);
 	printf("%s: Providing current time at port %d...\n", Program, PortNo);
 	ServerMainLoop(ServSocketFD, ProcessRequest,
-		PrintCurrentTime, 250000, user, userbase);
+		PrintCurrentTime, 250000, userbase);
 	printf("\n%s: Shutting down.\n", Program);
 	close(ServSocketFD);
 	return 0;
